@@ -1,0 +1,121 @@
+#!groovy
+
+ 
+
+def jsonF = '''
+
+{
+
+ 
+
+        "z_pipeline" : {
+
+            "platform" : "linux",
+
+               "agent" : "any",
+
+               "stages" : {
+
+ 
+
+                       "checkout" : {
+
+                           "scm" : "git",
+
+                              "repo" : "https://giturl",
+
+                              "branch" : "master",
+
+                              "credsId" : "mycreds"
+
+                       },
+
+                       "build" : {
+
+                              "script" : [
+
+                                      "mvn clean install -DskipTests"
+
+                              ]
+
+                       },
+
+                       "artifacts" : {
+
+                                      "server" : "server",
+
+                                      "targetPath" : "targetPath",
+
+                       },
+
+                       "test" : {
+
+                              "script" : [
+
+                                      "mvn clean install"
+
+                              ]
+
+                       },
+
+ 
+
+                       "deploy" : {
+
+                              "script" : [
+
+                                  "echo 'DEPLOY'"
+
+                              ]
+
+                       },
+
+                       "fortify" : {
+
+                              "script" : [
+
+                                      "echo 'FORTIFY'"
+
+                              ]
+
+                       },
+
+                       "blackduck" : {
+
+                              "script" : [
+
+                                      "echo 'BLACKDUCK'"
+
+                              ]
+
+                       }
+
+ 
+
+               },
+
+               "active" : true
+
+        },
+
+ 
+
+        "test1" : {
+
+ 
+
+        }
+
+ 
+
+}
+
+'''
+
+ 
+
+ 
+
+library('pipeline-lib')
+
+CommonPipeline.addStagesAndExecutePipeline(jsonF)
