@@ -6,107 +6,119 @@ def jsonF = '''
 
 {
 
- 
+  "z_pipeline": {
 
-        "z_pipeline" : {
+    "platform": "windows",
 
-            "platform" : "linux",
+    "agent": "any",
 
-               "agent" : "any",
+    "environment" : {
 
-               "stages" : {
+        "http_proxy" : "host:port",
 
- 
+        "https_proxy" : "host:port",
 
-                       "checkout" : {
+        "no_proxy" : "host"
 
-                           "scm" : "git",
+    },
 
-                              "repo" : "https://giturl",
+    "properties": {
 
-                              "branch" : "master",
+      "schedule": "H 1 * * *"
 
-                              "credsId" : "mycreds"
+    },
 
-                       },
+    "stages": {
 
-                       "build" : {
+      "checkout": {
 
-                              "script" : [
+        "scm": "git",
 
-                                      "mvn clean install -DskipTests"
+        "repo": "https://gitUlr",
 
-                              ]
+        "branch": "master",
 
-                       },
+        "credsId": "mycreds"
 
-                       "artifacts" : {
+      },
 
-                                      "server" : "server",
+      "build": {
 
-                                      "targetPath" : "targetPath",
+        "script": [
 
-                       },
+          "mvn clean install -DskipTests"
 
-                       "test" : {
+        ]
 
-                              "script" : [
+      },
 
-                                      "mvn clean install"
+      "artifacts": {
 
-                              ]
+        "server": "url",
 
-                       },
+        "credsId": "mycreds",
 
- 
+        "filePattern": "*.jar",
 
-                       "deploy" : {
+        "targetPath": "test_repo"
 
-                              "script" : [
+      },
 
-                                  "echo 'DEPLOY'"
+      "tics": {
 
-                              ]
+        "script": [
 
-                       },
+          "echo 'TICS'"
 
-                       "fortify" : {
+        ]
 
-                              "script" : [
+      },
 
-                                      "echo 'FORTIFY'"
+      "test": {
 
-                              ]
+        "script": [
 
-                       },
+          "echo 'TEST'"
 
-                       "blackduck" : {
+        ]
 
-                              "script" : [
+      },
 
-                                      "echo 'BLACKDUCK'"
+      "deploy": {
 
-                              ]
+        "script": [
 
-                       }
+          "echo 'DEPLOY'"
 
- 
+        ]
 
-               },
+      },
 
-               "active" : true
+      "fortify": {
 
-        },
+        "script": [
 
- 
+          "echo 'FORTIFY'"
 
-        "test1" : {
+        ]
 
- 
+      },
 
-        }
+      "blackduck": {
 
- 
+        "script": [
+
+          "echo 'BLACKDUCK'"
+
+        ]
+
+      }
+
+    },
+
+    "active": true
+
+  }
 
 }
 

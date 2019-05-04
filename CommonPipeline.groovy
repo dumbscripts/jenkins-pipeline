@@ -8,7 +8,7 @@ import groovy.transform.Field
 
  
 
-@Field def slave, checkout, build, test, deploy, artifacts, fortify, blackduck, name, platform
+@Field def slave, checkout, build, test, deploy, artifacts, fortify, blackduck, name, platform, tics, props, environment
 
 @Field ArrayList<String> allStages;
 
@@ -42,7 +42,7 @@ def convertLazyMap(Map lazyMap) {
 
 def getStageConfig(json, stage) {
 
-    if (name == null || slave == null || checkout == null || build == null || test == null || deploy == null || artifacts == null || fortify == null || blackduck == null || allStages == null) {
+    if (name == null || slave == null || checkout == null || build == null || test == null || deploy == null || artifacts == null || fortify == null || blackduck == null || allStages == null || tics == null || props == null || environment == null) {
 
         print("Getting stage configuration for stage - ${stage}")
 
@@ -62,15 +62,13 @@ def getStageConfig(json, stage) {
 
                    item.value = new HashMap<>(item.value)
 
+                   name = item.key
+
                    if (item.value["active"] == true) {
 
                        print("Setting data for all fields")
 
-                       
-
-                       name = item.key
-
-                                      platform = item.value["platform"]
+                       platform = item.value["platform"]
 
                        allStages = item.value["stages"].keySet().collect()
 
@@ -90,7 +88,17 @@ def getStageConfig(json, stage) {
 
                        blackduck = convertLazyMap(item.value["stages"]["blackduck"])
 
-                   }
+                       tics = convertLazyMap(item.value["stages"]["tics"])
+
+                       props = convertLazyMap(item.value["properties"])
+
+                       environment = convertLazyMap(item.value["environment"])
+
+                   } else {
+
+                      print("NO ACTIVE PIPELINE DEFINITION FOUND!")
+
+                              }
 
                }
 
@@ -118,15 +126,23 @@ def getStageConfig(json, stage) {
 
                case "blackduck" : return blackduck
 
+               case "tics" : return tics
+
                case "stages" : return allStages
 
-               default: throw Exception("Unknown stage! - ${stage}")
+               case "properties" : return props
+
+               case "environment" : return environment
+
+               default: error "UNKNOWN STAGE! - ${stage}"
 
         }
 
 }
 
  
+
+// Add pipelines and execute
 
 def addStagesAndExecutePipeline(json) {
 
@@ -152,107 +168,147 @@ def addStagesAndExecutePipeline(json) {
 
     }
 
-   
+       
+
+        // set properties for pipeline
+
+        def pMap = getStageConfig(json, "properties")
+
+        print("Found properties for pipeline - ${pMap}")
+
+        addPropertiesForPipeline(pMap)
+
+       
+
+        //get environment details for pipeline
+
+        def envMap = getStageConfig(json, "environment")
+
+        print("Found environment for pipeline - ${envMap}")
+
+       
 
         //checkout
 
-    if (allStages.contains('checkout')) {
+        if (allStages != null) {
 
-        def cs = getStageConfig(json, "checkout")
+               if (allStages.contains('checkout')) {
 
-        print ("Found checkout stage - ${cs}")
+                       def cs = getStageConfig(json, "checkout")
 
-        checkoutStage(cs);
+                       print ("Found checkout stage - ${cs}")
 
-    }
+                       checkoutStage(cs);
 
-        //build
+               }
 
-    if (allStages.contains("build")) {
+               //build
 
-        def bs = getStageConfig(json, "build")
+               if (allStages.contains("build")) {
 
-        print("Found build stage - ${bs}")
+                       def bs = getStageConfig(json, "build")
 
-        buildStage("", bs["script"])
+                       print("Found build stage - ${bs}")
 
-    }
+                       executeStage("", bs["script"], envMap, "Build")
 
-    // artifacts
+               }
 
-    if (allStages.contains("artifacts")) {
+               // artifacts
 
-               def art = getStageConfig(json, "artifacts")
+               if (allStages.contains("artifacts")) {
 
-        print("Found artifact stage - ${art}")
+                       def art = getStageConfig(json, "artifacts")
 
-               artifactStage("", "")
+                       print("Found artifact stage - ${art}")
+
+                       artifactStage("", art)
+
+               }
+
+               //tics
+
+               if (allStages.contains("tics")) {
+
+                       def tic = getStageConfig(json, "tics")
+
+                       print("Found tics stage - ${tic}")
+
+                       def qualMap = [:]
+
+                       qualMap["tics"] = tic["script"]
+
+                       executeParallelStage("", qualMap, envMap)
+
+               }
+
+ 
+
+               //security
+
+               if (allStages.contains("fortify") && allStages.contains("blackduck")) {
+
+                       def ssParamsFortify = getStageConfig(json, "fortify")
+
+                       def ssParamsBlackduck = getStageConfig(json, "blackduck")
+
+                       def scanMap = [:]
+
+                       scanMap["fortify"] = ssParamsFortify["script"]
+
+                       scanMap["blackduck"] = ssParamsBlackduck["script"]
+
+                       print("Found fortify stage - ${ssParamsFortify}")
+
+                       print("Found blackduck stage - ${ssParamsBlackduck}")
+
+                       executeParallelStage("", scanMap, envMap)
+
+               } else if (allStages.contains("fortify")) {
+
+                       def sfs = getStageConfig(json, "fortify")
+
+                       print("Found fortify stage - ${sfs}")
+
+                       executeStage("", sfs["script"], envMap, "Fortify")
+
+               } else if (allStages.contains("blackduck")) {
+
+                       def sbs = getStageConfig(json, "blackduck")
+
+                       print("Found blackduck stage - ${sbs}")
+
+                       executeStage("", sbs["script"], envMap, "Blackduck")     
+
+               }
+
+               //deploy
+
+               if (allStages.contains("deploy")) {
+
+                       def dep = getStageConfig(json, "deploy")
+
+                       print("Found deploy stage - ${dep}")
+
+                       executeStage("", dep["script"], envMap, "Deploy")
+
+               }
+
+               //tests
+
+               if (allStages.contains("test")) {
+
+                       def ts = getStageConfig(json, "test")
+
+                       print("Found tests stage - ${ts}")
+
+                       executeStage("", ts["script"], envMap, "Tests")                   
+
+               }
 
         }
 
    
-
-    //security
-
-    if (allStages.contains("fortify") && allStages.contains("blackduck")) {
-
-        def ssParamsFortify = getStageConfig(json, "fortify")
-
-        def ssParamsBlackduck = getStageConfig(json, "blackduck")
-
-        def scanMap = [:]
-
-        scanMap["fortify"] = ssParamsFortify["script"]
-
-        scanMap["blackduck"] = ssParamsBlackduck["script"]
-
-               print("Found fortify stage - ${ssParamsFortify}")
-
-               print("Found blackduck stage - ${ssParamsBlackduck}")
-
-        securityStage("", scanMap)
-
-    } else if (allStages.contains("fortify")) {
-
-        def sfs = getStageConfig(json, "fortify")
-
-               print("Found fortify stage - ${sfs}")
-
-        fortifyStage("", sfs["script"])
-
-    } else if (allStages.contains("blackduck")) {
-
-        def sbs = getStageConfig(json, "blackduck")
-
-               print("Found blackduck stage - ${sbs}")
-
-        blackduckStage("", sbs["script"])
-
-    }
-
-    //deploy
-
-    if (allStages.contains("deploy")) {
-
-               def dep = getStageConfig(json, "deploy")
-
-               print("Found deploy stage - ${dep}")
-
-               deployStage("", dep["script"])
-
-        }
-
-    //tests
-
-    if (allStages.contains("test")) {
-
-        def ts = getStageConfig(json, "test")
-
-               print("Found tests stage - ${ts}")
-
-        testStage("", ts["script"])
-
-    }
 
 }
 
@@ -282,7 +338,7 @@ def checkoutStage(mapCheckout){
 
         } else {
 
-               throw new Exception("Unknown scm - ${scm}")
+               error "UNKNOWN SCM - ${scm}"
 
         }
 
@@ -350,29 +406,15 @@ def checkoutTFVCRepo(n, repo, branch, credsId) {
 
  
 
-def buildStage(n, listScript){
-
-    node (n) {
-
-        stage("Build") {
-
-            executeMultiSteps(listScript)
-
-        }    
-
-    }
-
-}
-
- 
-
-def artifactStage(n, cmd){
+def artifactStage(n, mapArtifact){
 
     node (n) {
 
         stage("Artifact Publish") {
 
-            echo "artifact publish"
+            echo "Publishing artifacts ..."
+
+                       //publishArtifact(mapArtifact)
 
         }   
 
@@ -381,90 +423,62 @@ def artifactStage(n, cmd){
 }
 
  
-
-def deployStage(n, listScript) {
-
-    node (n) {
-
-        stage("Deploy") {
-
-                       executeMultiSteps(listScript)
-
-        }   
-
-    }
-
-}
-
- 
-
-def testStage(n, listScript) {
-
-    node (n) {
-
-        stage("Tests") {
-
-            executeMultiSteps(listScript)
-
-        }
-
-    }
-
-}
-
- 
-
-def fortifyStage(n, listScript) {
-
-    node (n) {
-
-        stage("Fortify scan") {
-
-            executeMultiSteps(listScript)
-
-        }   
-
-    }
-
-}
-
- 
-
-def blackduckStage(n, listScript) {
-
-    node (n) {
-
-        stage("Blackduck scan") {
-
-            executeMultiSteps(listScript)
-
-        }   
-
-    }
-
-}
-
- 
-
-def securityStage(n, scanMap) {
-
-    def map = [:]
-
-    map["fortify"] = { fortifyStage(n, scanMap["fortify"]) }
-
-    map["blackduck"] = { blackduckStage(n, scanMap["blackduck"]) }
-
-    map.failFast = true
-
-   
-
-    parallel map
-
-}
 
  
 
 // Helper methods
+
+ 
+
+// common stage method to execute stages within environment
+
+def executeStage(n, listSteps, envMap, stageName) {
+
+        def envList = []
+
+        envMap.each { k, v -> envList.add("${k}=${v}") }
+
+        print ("Using environment for stages/steps ==> ${envList}")
+
+        node (n) {
+
+               // set environment
+
+               withEnv(envList) {
+
+                       stage(stageName) {
+
+                                      executeMultiSteps(listSteps)
+
+                       }   
+
+               }
+
+        }
+
+}
+
+ 
+
+// parallel stage execution
+
+def executeParallelStage(n, scanMap, envMap) {
+
+        def map = [:]
+
+        scanMap.each { k, v ->
+
+               map[k.capitalize()] = { executeStage(n, v, envMap, k.capitalize()) }
+
+        }
+
+        map.failFast = true
+
+        parallel map
+
+}
+
+ 
 
  
 
@@ -488,3 +502,52 @@ def executeMultiSteps(listSteps) {
 
 }
 
+ 
+
+def publishArtifact(artifactData) {
+
+    if (artifactData != {}) {
+
+               def aServer = Artifactory.newServer url: "${artifactData['server']}", credentialsId: "${artifactData['credsId']}"
+
+       def uploadSpec = """{
+
+               "files": [{
+
+                       "pattern": "${artifactData['filePattern']}",
+
+                       "target": "${artifactData['targetPath']}"
+
+                    }]
+
+               }"""
+
+               aServer.bypassProxy = true                 
+
+               aServer.upload(uploadSpec)
+
+    }
+
+}
+
+ 
+
+def addPropertiesForPipeline(propsMap) {
+
+        def sched = propsMap["schedule"]
+
+        if (sched != "") {
+
+               print("Setting properties for pipeline...")
+
+               properties([[$class: 'BuildDiscarderProperty',
+
+                strategy: [$class: 'LogRotator', numToKeepStr: '10']],
+
+                pipelineTriggers([[$class: "TimerTrigger", spec: "${propsMap["schedule"]}"]])
+
+                ])
+
+        }
+
+}
