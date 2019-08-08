@@ -1,3 +1,13 @@
+//Author : Mahesh Hadimani
+
+//Created: 20-Apr-2019
+
+//Modified: 05-Aug-2019
+
+//Info: Adding support for integration with PDP
+
+ 
+
 @NonCPS
 
 import hudson.EnvVars
@@ -8,29 +18,47 @@ import groovy.transform.Field
 
  
 
-@Field def slave, checkout, build, test, deploy, artifacts, fortify, blackduck, name, platform, tics, props, environment
+@Field def slave, checkout, build, artifacts, name, platform, props, environment, mail, startParallel, failParallel, cleanWorkspace, docker
 
-@Field ArrayList<String> allStages;
+@Field ArrayList<String> allStages, parallelStages
+
+@Field def isParallelInProgress = false
 
  
 
+@Field def cwd = "./"
+
+ 
+
+//parses json and converts json to a map
+
 def getPipelineJson(json) {
 
-        def jsonSlurper = new JsonSlurper()
+    def jsonSlurper = new JsonSlurper()
 
-        return new HashMap<>(jsonSlurper.parseText(json))
+    return new HashMap<>(jsonSlurper.parseText(json))
 
 }
 
  
 
-def convertLazyMap(Map lazyMap) {
+// converts lazymap to hashmap
+
+def convertLazyMap(lazyMap) {
 
     hMap = new HashMap<>();
 
-    for ( prop in lazyMap ) {
+    lazyMap.each { prop ->
 
-        hMap[prop.key] = prop.value
+        if (prop.value instanceof java.util.ArrayList) {
+
+            hMap[prop.key] = prop.value.collect  { it -> getHashMapFromLazyMap(it) }
+
+        } else {
+
+           hMap[prop.key] = prop.value 
+
+        }
 
     }
 
@@ -40,103 +68,193 @@ def convertLazyMap(Map lazyMap) {
 
  
 
+def getHashMapFromLazyMap(lazyMap) {
+
+    if (lazyMap instanceof java.lang.String) {
+
+        return lazyMap
+
+    }
+
+    m = new HashMap<>();
+
+    for ( prop in lazyMap ) {
+
+        m[prop.key] = prop.value
+
+    }
+
+    return m
+
+}
+
+ 
+
 def getStageConfig(json, stage) {
 
-    if (name == null || slave == null || checkout == null || build == null || test == null || deploy == null || artifacts == null || fortify == null || blackduck == null || allStages == null || tics == null || props == null || environment == null) {
+    if (name == null || slave == null || allStages == null || props == null || environment == null || mail == null || startParallel == null || failParallel == null) {
 
         print("Getting stage configuration for stage - ${stage}")
 
-               def res = getPipelineJson(json)
+        def res = getPipelineJson(json)
 
-              
+ 
 
         res = new HashMap<>(res)
 
         print("Got pipeline json  ==> ${res}")
 
-   
+ 
 
         for (item in res) {
 
-               if (!item.value.isEmpty()) {
+            if (!item.value.isEmpty()) {
 
-                   item.value = new HashMap<>(item.value)
+                item.value = new HashMap<>(item.value)
 
-                   name = item.key
+                name = item.key
 
-                   if (item.value["active"] == true) {
+                if (item.value["active"] == true) {
 
-                       print("Setting data for all fields")
+                    print("Setting data for all fields")
 
-                       platform = item.value["platform"]
+ 
 
-                       allStages = item.value["stages"].keySet().collect()
+                    platform = item.value["platform"]
 
-                       slave = item.value["agent"]
+                    allStages = item.value["stages"].keySet().collect()
 
-                       checkout = convertLazyMap(item.value["stages"]["checkout"])
+                    slave = item.value["agent"]
 
-                       build = convertLazyMap(item.value["stages"]["build"])
+                    startParallel = item.value["startParallelAfterStage"]
 
-                       artifacts = convertLazyMap(item.value["stages"]["artifacts"])
+                    failParallel = item.value["parallelFailEarly"]
 
-                       test = convertLazyMap(item.value["stages"]["test"])
+                    props = convertLazyMap(item.value["properties"])
 
-                       deploy = convertLazyMap(item.value["stages"]["deploy"])
+                    environment = convertLazyMap(item.value["environment"])
 
-                       fortify = convertLazyMap(item.value["stages"]["fortify"])
+                    mail = convertLazyMap(item.value["mail"])
 
-                       blackduck = convertLazyMap(item.value["stages"]["blackduck"])
+                    parallelStages = item.value["stages"].findAll { it -> (it.value.parallel == true || (it.value.parallel != null && (!it.value instanceof List))) }.keySet().collect()
 
-                       tics = convertLazyMap(item.value["stages"]["tics"])
+                    docker = convertLazyMap(item.value["docker"])
 
-                       props = convertLazyMap(item.value["properties"])
+                } else {
 
-                       environment = convertLazyMap(item.value["environment"])
+                    print("NO ACTIVE PIPELINE DEFINITION FOUND!")
 
-                   } else {
+                }
 
-                      print("NO ACTIVE PIPELINE DEFINITION FOUND!")
+            }
 
-                              }
-
-               }
-
-       }
+        }
 
     }
 
-        switch (stage.toLowerCase()) {
+    switch (stage.toLowerCase()) {
 
-            case "name" : return name
+        case "name" : return name
 
-               case "slave" : return agent
+        case "slave" : return slave
 
-               case "checkout" : return checkout
+        case "stages" : return allStages
 
-               case "build" : return build
+        case "properties" : return props
 
-               case "test" : return test
+        case "environment" : return environment
 
-               case "deploy" : return deploy
+        case "mail" : return mail
 
-               case "artifacts" : return artifacts
+        case "parallel" : return parallelStages
 
-               case "fortify" : return fortify
+        case "docker" : return docker
 
-               case "blackduck" : return blackduck
+        default: returnCustomStage(json, stage)
 
-               case "tics" : return tics
+    }
 
-               case "stages" : return allStages
+}
 
-               case "properties" : return props
+ 
 
-               case "environment" : return environment
+// return custom stages
 
-               default: error "UNKNOWN STAGE! - ${stage}"
+def returnCustomStage(json, stage) {
+
+    def res = getPipelineJson(json)
+
+ 
+
+    res = new HashMap<>(res)
+
+    for (item in res) {
+
+        if (!item.value.isEmpty()) {
+
+            item.value = new HashMap<>(item.value)
+
+ 
+
+            if (item.value["active"] == true) {
+
+                print("Returning custom stage data for - ${stage}")
+
+                if (item.value["stages"][stage] instanceof List){
+
+                    ArrayList<String> list = (item.value["stages"][stage].collect { it -> convertLazyMap(it) })
+
+                    return list
+
+                } else {
+
+                    return convertLazyMap(item.value["stages"][stage])
+
+                }
+
+            }
 
         }
+
+    }
+
+}
+
+ 
+
+//execute parallel
+
+def verifyAndRunInParallel(json, pCount, pStages, slave, envMap) {
+
+    if (!isParallelInProgress && pCount > startParallel && startParallel != null) {
+
+        print("Executing all parallel stages...")
+
+        isParallelInProgress = true
+
+        def parallelMap = [:]
+
+        for (ps in pStages) {
+
+            def scriptParams = getStageConfig(json, ps)
+
+            parallelMap[ps] = scriptParams
+
+        }
+
+        print("Executing stages in parallel - ${pStages}]")
+
+        print("Found parallelFailEarly - ${failParallel}")
+
+        if (failParallel == null) {
+
+            failParallel = true
+
+        }
+
+        executeParallelStage(slave, parallelMap, failParallel, envMap)
+
+    }
 
 }
 
@@ -146,29 +264,73 @@ def getStageConfig(json, stage) {
 
 def addStagesAndExecutePipeline(json) {
 
-    print("Executing pipeline")
+    def isParallelInProgress = false
+
+    try {
+
+        print("Executing pipeline")
 
        
 
-    List allStages = getStageConfig(json, "stages")
+        //parallel change
 
-    print("All stages - ${allStages}")
+        allStages = getStageConfig(json, "stages")
 
-   
+        print("All stages - ${allStages}")
 
-    def jobName = getStageConfig(json, "name")
+ 
 
-    // Add node data
+        List pStages = getStageConfig(json, "parallel")
 
-    node {
+        if (pStages != []) {
 
-        currentBuild.displayName = "${jobName}_${BUILD_NUMBER}"
+            // Empty pStages if the parallel stages == 1
 
-        currentBuild.description = "Pipeline for - ${jobName}"
+            if (pStages.size() == 1) {
 
-    }
+                print("Found only one parallel stage - REMOVING from parallel list")
 
-       
+                pStages = [];
+
+            } else {
+
+                print("PARALLEL STAGES => ${pStages}")
+
+            }
+
+        }
+
+ 
+
+        //get docker configuration
+
+        docker = getStageConfig(json, "docker")
+
+ 
+
+        def slaveNode = getStageConfig(json, "slave")
+
+        print("Found slave node - ${slaveNode}")
+
+ 
+
+        def jobName = getStageConfig(json, "name")
+
+        // Add node data
+
+        node (slaveNode) {
+
+            cwd = WORKSPACE
+
+            currentBuild.displayName = "${jobName}_${BUILD_NUMBER}"
+
+            currentBuild.description = "Pipeline for - ${jobName}"
+
+            currentBuild.result = "SUCCESS"
+
+        }
+
+ 
 
         // set properties for pipeline
 
@@ -176,9 +338,15 @@ def addStagesAndExecutePipeline(json) {
 
         print("Found properties for pipeline - ${pMap}")
 
-        addPropertiesForPipeline(pMap)
+        cleanWorkspace = pMap["cleanWorkspace"]
 
-       
+        if (pMap["parameters"]) {
+
+            addParametersForPipline(pMap["parameters"])
+
+        }
+
+ 
 
         //get environment details for pipeline
 
@@ -186,129 +354,173 @@ def addStagesAndExecutePipeline(json) {
 
         print("Found environment for pipeline - ${envMap}")
 
-       
+ 
 
-        //checkout
+        //allStages = allStages - pStages //remove all the parallel stages from allStages list
+
+        print("ALL STAGES => ${allStages}")
 
         if (allStages != null) {
 
-               if (allStages.contains('checkout')) {
+            def stageType = null
 
-                       def cs = getStageConfig(json, "checkout")
+            def parallelCount = 0
 
-                       print ("Found checkout stage - ${cs}")
+            for (eStage in allStages) {
 
-                       checkoutStage(cs);
+                print("FOUND STAGE => ${eStage}")
 
-               }
+                parallelCount += 1
 
-               //build
+   
 
-               if (allStages.contains("build")) {
+                //verify and run in parallel
 
-                       def bs = getStageConfig(json, "build")
+                verifyAndRunInParallel(json, parallelCount, pStages, slaveNode, envMap)
 
-                       print("Found build stage - ${bs}")
+               
 
-                       executeStage("", bs["script"], envMap, "Build")
+                if (eStage in pStages) {
 
-               }
+                    print("Skipping executing stage as it's executed in parallel - ${eStage}")
 
-               // artifacts
+                    continue
 
-               if (allStages.contains("artifacts")) {
+                }
 
-                       def art = getStageConfig(json, "artifacts")
+                stageType = getStageType(json, eStage)
 
-                       print("Found artifact stage - ${art}")
+                // checkout
 
-                       artifactStage("", art)
+                if (stageType != null && stageType == "checkout") {
 
-               }
+                    def cs = getStageConfig(json, eStage)
 
-               //tics
+                    print ("Found checkout stage - ${cs}")
 
-               if (allStages.contains("tics")) {
+                    checkoutStage(getSlaveNodeForStage(cs, slaveNode), cs, eStage);
 
-                       def tic = getStageConfig(json, "tics")
+                }
 
-                       print("Found tics stage - ${tic}")
+                // artifacts
 
-                       def qualMap = [:]
+                else if (stageType != null && stageType == "artifact") {
 
-                       qualMap["tics"] = tic["script"]
+                    def art = getStageConfig(json, eStage)
 
-                       executeParallelStage("", qualMap, envMap)
+                    print("Found artifact stage - ${art}")
 
-               }
+                    artifactStage(getSlaveNodeForStage(art, slaveNode), art, eStage)
+
+                }
+
+                // reports
+
+                else if (stageType != null && stageType == "reports") {
+
+                    def reportsMap = getStageConfig(json, eStage)
+
+                    print("Found Report stage - ${reportsMap}")
+
+                    reportsStage(slaveNode, reportsMap, eStage)
+
+                }
+
+                // deploy to cf
+
+                else if (stageType != null && stageType == "deploy") {
+
+                    def deployMap = getStageConfig(json, eStage)
+
+                    print("Found Deploy stage - ${deployMap}")
+
+                    deployCf(getSlaveNodeForStage(deployMap, slaveNode), deployMap, envMap, eStage)
+
+                }
+
+                // warnings
+
+                else if (stageType != null && stageType == "warnings") {
+
+                    def wMap = getStageConfig(json, eStage)
+
+                    print("Found Warnings stage - ${wMap}")
+
+                    performCheckForCompilerWarnings(getSlaveNodeForStage(wMap, slaveNode), wMap, eStage)
+
+                }
+
+                // docker
+
+                else if (stageType != null && stageType == "docker") {
+
+                    def dockerMap = getStageConfig(json, eStage)
+
+                    print("Found Docker stage - ${dockerMap}")
+
+                    invokeDockerStage(getSlaveNodeForStage(dockerMap, slaveNode), dockerMap, eStage)
+
+                }
+
+                // handle all custom stage
+
+                else {
+
+                    def stageParams = getStageConfig(json, eStage)
+
+                    print("Found custom stage - ${stageParams}")
+
+                    def decla = stageParams["declarative"]
+
+                    if ( decla != null && decla == true) {
+
+                        executeDeclarativeStage(slaveNode, stageParams, eStage)
+
+                    } else {
+
+                        executeStage(getSlaveNodeForStage(stageParams, slaveNode), stageParams, envMap, eStage)
+
+                    }
+
+                }
+
+                // for end
+
+            }
 
  
 
-               //security
+        }
 
-               if (allStages.contains("fortify") && allStages.contains("blackduck")) {
+    } catch(err) {
 
-                       def ssParamsFortify = getStageConfig(json, "fortify")
+        currentBuild.result = "FAILURE"
 
-                       def ssParamsBlackduck = getStageConfig(json, "blackduck")
+        throw err
 
-                       def scanMap = [:]
+    } finally {
 
-                       scanMap["fortify"] = ssParamsFortify["script"]
+        // clean workspace
 
-                       scanMap["blackduck"] = ssParamsBlackduck["script"]
+        if (cleanWorkspace != null && cleanWorkspace) {
 
-                       print("Found fortify stage - ${ssParamsFortify}")
+            executeStagesInNodeOrDocker(slave, { cleanWs() } )
 
-                       print("Found blackduck stage - ${ssParamsBlackduck}")
-
-                       executeParallelStage("", scanMap, envMap)
-
-               } else if (allStages.contains("fortify")) {
-
-                       def sfs = getStageConfig(json, "fortify")
-
-                       print("Found fortify stage - ${sfs}")
-
-                       executeStage("", sfs["script"], envMap, "Fortify")
-
-               } else if (allStages.contains("blackduck")) {
-
-                       def sbs = getStageConfig(json, "blackduck")
-
-                       print("Found blackduck stage - ${sbs}")
-
-                       executeStage("", sbs["script"], envMap, "Blackduck")     
-
-               }
-
-               //deploy
-
-               if (allStages.contains("deploy")) {
-
-                       def dep = getStageConfig(json, "deploy")
-
-                       print("Found deploy stage - ${dep}")
-
-                       executeStage("", dep["script"], envMap, "Deploy")
-
-               }
-
-               //tests
-
-               if (allStages.contains("test")) {
-
-                       def ts = getStageConfig(json, "test")
-
-                       print("Found tests stage - ${ts}")
-
-                       executeStage("", ts["script"], envMap, "Tests")                   
-
-               }
+            //node(slave) { cleanWs() }
 
         }
 
-   
+        def mailParams = getStageConfig(json, "mail")
+
+        print("Found mail stage - ${mailParams}")
+
+        if (mailParams != [:]) {
+
+            sendEmailNotification(mailParams)
+
+        }
+
+    }
 
 }
 
@@ -316,31 +528,47 @@ def addStagesAndExecutePipeline(json) {
 
 // logic for checkout stage
 
-def checkoutStage(mapCheckout){
+def checkoutStage(n, mapCheckout, stageName){
 
-        def scm = mapCheckout["scm"].toLowerCase()
+    def scm = mapCheckout["scm"].toLowerCase()
 
-        def n = slave
+    def repo = mapCheckout["repo"]
 
-        def repo = mapCheckout["repo"]
+    def branch = mapCheckout["branch"]
 
-        def branch = mapCheckout["branch"]
+    def credsId = mapCheckout["credsId"]
 
-        def credsId = mapCheckout["credsId"]
+    def refSpec = mapCheckout["refSpec"]
 
-        if ( scm == "git") {
+    def params = mapCheckout["custom"]
 
-               checkoutGitRepo('', repo, branch, credsId)
+    def dir = mapCheckout["dir"]
 
-        } else if (scm == "tfvc") {
+    def sparseCheckoutPaths = mapCheckout["sparseCheckoutPath"]
 
-               checkoutTFVCRepo('', repo, branch, credsId)
+    if ( scm == "git") {
 
-        } else {
+        if (params != "") {
 
-               error "UNKNOWN SCM - ${scm}"
+            //handle the case of COMMIT ID
+
+            branch = getProperty(mapCheckout["custom"])   
+
+            print ("Got custom param -> ${mapCheckout["custom"]} -> with value - ${branch}")
 
         }
+
+        checkoutGitRepo(n, repo, branch, credsId, refSpec, dir, sparseCheckoutPaths, stageName)
+
+    } else if (scm == "tfvc") {
+
+        checkoutTFVCRepo(n, repo, branch, credsId, stageName)
+
+    } else {
+
+        error "UNKNOWN SCM - ${scm}"
+
+    }
 
 }
 
@@ -348,11 +576,17 @@ def checkoutStage(mapCheckout){
 
 // checkout from a git repo
 
-def checkoutGitRepo(n, repo, branch, credsId) {
+def checkoutGitRepo(n, repo, branch, credsId, refSpec, dir, sparseCheckoutPaths, stageName) {
 
-        node (n) {
+    List<hudson.plugins.git.extensions.impl.SparseCheckoutPath> sparsePaths = new ArrayList<>();
 
-        stage('Checkout') {
+    sparseCheckoutPaths.collect { it -> sparsePaths.add([$class:'SparseCheckoutPath', path: it]) }
+
+    print("*** sparsePaths -> $sparsePaths")
+
+    executeStagesInNodeOrDocker(n, {
+
+        stage(stageName) {
 
             checkout(
 
@@ -362,15 +596,23 @@ def checkoutGitRepo(n, repo, branch, credsId) {
 
                 doGenerateSubmoduleConfigurations: false,
 
-                extension: [],
+                extensions: [
+
+                    [$class: 'RelativeTargetDirectory', relativeTargetDir: dir],
+
+                    [$class: 'SparseCheckoutPaths',  sparseCheckoutPaths: sparsePaths]
+
+ 
+
+                ],
 
                 submoduleCfg: [],
 
-                userRemoteConfigs: [[credentialsId: credsId, url: repo]]])
+                userRemoteConfigs: [[credentialsId: credsId, url: repo, refspec: refSpec]]])
 
-        }   
+        }
 
-    }
+    })
 
 }
 
@@ -378,47 +620,121 @@ def checkoutGitRepo(n, repo, branch, credsId) {
 
 // checkout from a TFVS repo
 
-def checkoutTFVCRepo(n, repo, branch, credsId) {
+def checkoutTFVCRepo(n, repo, branch, credsId, stageName) {
 
-        node (n) {
+    executeStagesInNodeOrDocker(n, {
 
-               stage('Checkout') {
+        stage(stageName) {
 
-                       checkout(
+            checkout(
 
-                              [$class: 'TeamFoundationServerScm',
+                [$class: 'TeamFoundationServerScm',
 
-                              serverUrl: repo,                            
+                serverUrl: repo,
 
-                              projectPath: branch,
+                projectPath: branch,
 
-                              useOverwrite: true,
+                useOverwrite: true,
 
-                              useUpdate: true,
+                useUpdate: true,
 
-                              credentialsConfigurer: [[$class: 'AutomaticCredentialsConfigurer']]])
+                credentialsConfigurer: [$class: 'AutomaticCredentialsConfigurer']
 
-               }
+            ])
 
         }
+
+    })
 
 }
 
  
 
-def artifactStage(n, mapArtifact){
+def artifactStage(n, mapArtifact, stageName){
 
-    node (n) {
+    executeStagesInNodeOrDocker(n, {
 
-        stage("Artifact Publish") {
+        stage(stageName) {
 
-            echo "Publishing artifacts ..."
+            echo "Publishing/Downloading artifacts ..."
 
-                       //publishArtifact(mapArtifact)
+            publishArtifact(mapArtifact)
 
-        }   
+        }
 
-    }
+    })
+
+}
+
+ 
+
+def reportsStage(n, reportsMap, stageName){
+
+    executeStagesInNodeOrDocker(n, {
+
+        stage(stageName) {
+
+            echo "Publishing HTML Reports ..."
+
+            publishReports(n, reportsMap)
+
+        }
+
+    })
+
+}
+
+ 
+
+def deployCf(n, deployMap, envMap, stageName) {
+
+    executeStagesInNodeOrDocker(n, {
+
+        stage(stageName) {
+
+            echo "Deploying artifacts to cloud foundry ..."
+
+            deployToCf(n, deployMap, envMap, stageName)
+
+        }
+
+    })
+
+}
+
+ 
+
+def executeDeclarativeStage(n, decParams, stageName) {
+
+    def listSteps = decParams["script"]
+
+    executeStagesInNodeOrDocker(n, {
+
+        stage(stageName) {
+
+            echo "Executing declarative steps ..."
+
+            //steps {
+
+                //script {
+
+                   // listSteps.join("\n")
+
+                    // for (s in listSteps) {
+
+                    //     print("S => ${s}")
+
+                    //     "${s}"
+
+                    // }
+
+                //}
+
+            //}                    
+
+        }
+
+    })
 
 }
 
@@ -430,101 +746,21 @@ def artifactStage(n, mapArtifact){
 
  
 
-// common stage method to execute stages within environment
+// get slave node if configured for each stage else return the root agent configured
 
-def executeStage(n, listSteps, envMap, stageName) {
+def getSlaveNodeForStage(params, node) {
 
-        def envList = []
+    if (params["agent"] == null || params["agent"] == "") {
 
-        envMap.each { k, v -> envList.add("${k}=${v}") }
+        return node
 
-        print ("Using environment for stages/steps ==> ${envList}")
+    } else {
 
-        node (n) {
+        print("Returning agent defined in the stage - ${params["agent"]}")
 
-               // set environment
+        slave = params["agent"]
 
-               withEnv(envList) {
-
-                       stage(stageName) {
-
-                                      executeMultiSteps(listSteps)
-
-                       }   
-
-               }
-
-        }
-
-}
-
- 
-
-// parallel stage execution
-
-def executeParallelStage(n, scanMap, envMap) {
-
-        def map = [:]
-
-        scanMap.each { k, v ->
-
-               map[k.capitalize()] = { executeStage(n, v, envMap, k.capitalize()) }
-
-        }
-
-        map.failFast = true
-
-        parallel map
-
-}
-
- 
-
- 
-
-def executeMultiSteps(listSteps) {
-
-        for (item in listSteps) {
-
-               print("Executing step - ${item}")
-
-               if (platform == "linux") {
-
-                       sh "${item}"
-
-               } else {
-
-                       bat "${item}"
-
-               }
-
-        }
-
-}
-
- 
-
-def publishArtifact(artifactData) {
-
-    if (artifactData != {}) {
-
-               def aServer = Artifactory.newServer url: "${artifactData['server']}", credentialsId: "${artifactData['credsId']}"
-
-       def uploadSpec = """{
-
-               "files": [{
-
-                       "pattern": "${artifactData['filePattern']}",
-
-                       "target": "${artifactData['targetPath']}"
-
-                    }]
-
-               }"""
-
-               aServer.bypassProxy = true                 
-
-               aServer.upload(uploadSpec)
+        return params["agent"]
 
     }
 
@@ -532,22 +768,776 @@ def publishArtifact(artifactData) {
 
  
 
+//return stage properties
+
+def getStageType(json, stage) {
+
+    def stageProp = returnCustomStage(json, stage)
+
+    print("stage prop => ${stageProp}")
+
+    if (stageProp instanceof List) {
+
+        if (stageProp.get(0)["reportName"]) {
+
+            return "reports"
+
+        }
+
+    } else if (stageProp["scm"]) {
+
+        return "checkout"
+
+    } else if (stageProp["filePattern"] && stageProp["targetPath"]) {
+
+        return "artifact"
+
+    } else if (stageProp["credsIdForCF"]) {
+
+        return "deploy"
+
+    } else if (stageProp["parsers"]) {
+
+        return "warnings"
+
+    } else if (stageProp["dockerServer"]) {
+
+        return "docker"
+
+    } else {
+
+        return null
+
+    }
+
+}
+
+ 
+
+// common stage method to execute stages within environment
+
+def executeStage(n, params, envMap, stageName) {
+
+    def envList = []
+
+    envMap.each { k, v -> envList.add("${k}=${v}") }
+
+    print ("Using environment for stages/steps ==> ${envList}")
+
+   
+
+    //handle the case of in-stage platform - for cross platform build, test machines
+
+    def os = params["platform"]
+
+    if (os != null) {
+
+        platform = os.toLowerCase()
+
+        cwd = executeStagesInNodeOrDocker(n, { WORKSPACE })
+
+        //cwd = node(slave) { WORKSPACE }
+
+    }
+
+    executeStagesInNodeOrDocker(n, {
+
+        withEnv(envList) {
+
+            stage(stageName) {
+
+                dir(cwd) {
+
+                    executeMultiSteps(params)
+
+                }
+
+            }
+
+        }
+
+    })
+
+}
+
+ 
+
+// parallel stage execution
+
+def executeParallelStage(n, scanMap, fp, envMap) {
+
+    def map = [:]
+
+    scanMap.each { k, v ->
+
+        print(k)
+
+        print(v)
+
+        map[k] = { executeStage(n, v, envMap, k) }
+
+    }
+
+    map.failFast = fp
+
+    parallel map
+
+}
+
+ 
+
+// method to execute multiple steps provided in a script block
+
+def executeMultiSteps(params) {
+
+    def steps = []
+
+    def listSteps = params["script"]
+
+   
+
+    // interpolate all env variables
+
+    for (item in listSteps) {
+
+        if (item.contains("BUILD_NUMBER") || item.contains("BUILD_TIMESTAMP") || item.contains("WORKSPACE") || item.contains("JOB_NAME")) {
+
+            print("Found jenkins env variable => ${item}")
+
+            steps.add(getJenkinsEnvVariable(item))
+
+        } else {
+
+            steps.add(item)
+
+        }
+
+    }
+
+   
+
+    //setting executeInOneShell to true by default
+
+    params["executeInOneShell"] = true
+
+    print("STEPS => ${steps}")
+
+    if (params["executeInOneShell"]) {
+
+        print("Executing steps in one shell")
+
+        platform = platform.toLowerCase()  
+
+        if (platform == "linux") {
+
+            sh "${steps.join('\n')}"
+
+        } else {
+
+            bat "${steps.join('\n')}"
+
+        }
+
+    } else {
+
+        // this block must be removed as this is dead code
+
+        // Execute multiple steps in seperate shell
+
+        for (item in steps) {
+
+            print("Executing step - ${item}")
+
+            if (item.contains("cd ")) {
+
+                cwd = item.split("cd ")[1]
+
+            }
+
+            dir(cwd) {
+
+                platform = platform.toLowerCase()
+
+                if (platform == "linux" && !item.contains("cd ")) {
+
+                    sh "${item}"
+
+                } else if (!item.contains("cd ")) {
+
+                    bat "${item}"
+
+                }
+
+            }
+
+        }
+
+    }
+
+}
+
+ 
+
+// publishes the artifacts to the artifactory, uses the jfrog artifactory plugin
+
+def publishArtifact(artifactData, download=false) {
+
+    if (artifactData != {}) {
+
+        def aServer = Artifactory.newServer url: "${artifactData['server']}", credentialsId: "${artifactData['credsId']}"
+
+        def uploadSpec = """{
+
+                        "files": [{
+
+                       "pattern": "${artifactData['filePattern']}",
+
+                       "target": "${artifactData['targetPath']}"
+
+                    }]
+
+            }"""
+
+        aServer.bypassProxy = artifactData['bypassProxy']
+
+        if (download || artifactData["action"] == "download") {
+
+            print("Downloading artifacts from artifactory")
+
+            aServer.download(uploadSpec)
+
+        } else {
+
+            aServer.upload(uploadSpec)
+
+        }
+
+    }
+
+}
+
+ 
+
+ 
+
 def addPropertiesForPipeline(propsMap) {
 
-        def sched = propsMap["schedule"]
+    def sched = propsMap["schedule"]
+
+    def poll = propsMap["poll"]
+
+ 
+
+    // apply default properties for all jobs
+
+    properties([
+
+        disableConcurrentBuilds(),
+
+        [$class: 'BuildDiscarderProperty', strategy: [$class: 'LogRotator', numToKeepStr: '15']]
+
+    ])
+
+    if (sched != null) {
 
         if (sched != "") {
 
-               print("Setting properties for pipeline...")
+            print("Setting schedule for pipeline...")
 
-               properties([[$class: 'BuildDiscarderProperty',
+            properties([
 
-                strategy: [$class: 'LogRotator', numToKeepStr: '10']],
+                pipelineTriggers([[$class: "TimerTrigger", spec: "${sched}"]]),
 
-                pipelineTriggers([[$class: "TimerTrigger", spec: "${propsMap["schedule"]}"]])
+                disableConcurrentBuilds(),
 
-                ])
+                [$class: 'BuildDiscarderProperty', strategy: [$class: 'LogRotator', numToKeepStr: '15']]
+
+            ])
 
         }
+
+    }
+
+    if (poll != null) {
+
+        if (poll != "") {
+
+            print("Setting poll property for pipeline...")
+
+            properties([
+
+                pipelineTriggers([[$class: "SCMTrigger", scmpoll_spec: "${poll}"]]),
+
+                disableConcurrentBuilds(),
+
+                [$class: 'BuildDiscarderProperty', strategy: [$class: 'LogRotator', numToKeepStr: '15']]
+
+            ])
+
+        }
+
+    }
+
+}
+
+ 
+
+def addParametersForPipline(paramMap) {
+
+    List<ParameterDefinition> paramDefn = new ArrayList<>()
+
+    for (item in paramMap) {
+
+        param = item.split(":")
+
+        if ( param[1] == "STRING") {
+
+            paramDefn.add(stringParam(defaultValue: param[2], name: param[0]))
+
+        } else if (param[1] == "BOOLEAN") {
+
+            paramDefn.add(booleanParam(defaultValue: param[2], name: param[0]))
+
+        } else {
+
+            error "Unknown parameter defined - ${item}"
+
+        }
+
+    }
+
+    if (paramDefn) {
+
+        properties([parameters(paramDefn)])
+
+    }
+
+}
+
+ 
+
+// sends email notification - uses the email extension plugin
+
+def sendEmailNotification(recipientMap) {
+
+    print("Sending mail notification for all the recipients!")
+
+    if (recipientMap != [:] || recipientMap["to"] == "") {
+
+        def emailBody = '''${SCRIPT, template="groovy-html.template"}'''
+
+        def emailSubject = "${env.JOB_NAME} - Build# ${env.BUILD_NUMBER} - ${currentBuild.result}"
+
+        emailext(
+
+            mimeType: "text/html",
+
+            replyTo: "${recipientMap["from"]}",
+
+            subject: emailSubject,
+
+            to: "${recipientMap["to"]}",
+
+            body: emailBody,
+
+            recipientProviders: [[$class: 'CulpritsRecipientProvider'],[$class: 'RequesterRecipientProvider']]
+
+        )
+
+    }
+
+ 
+
+}
+
+ 
+
+// return values for jenkins environment variables
+
+def getJenkinsEnvVariable(var) {
+
+    if (var.contains("BUILD_NUMBER")) {
+
+        return var.replaceAll("BUILD_NUMBER", getProperty("BUILD_NUMBER"))
+
+    } else if (var.contains("BUILD_TIMESTAMP")) {
+
+        return var.replaceAll("BUILD_TIMESTAMP", getProperty("BUILD_TIMESTAMP"))
+
+    } else if (var.contains("BUILD_NUMBER") && var.contains("BUILD_TIMESTAMP")) {
+
+        var = var.replaceAll("BUILD_NUMBER", getProperty("BUILD_NUMBER"))
+
+        return var.replaceAll("BUILD_TIMESTAMP", getProperty("BUILD_TIMESTAMP"))
+
+    } else if (var.contains("WORKSPACE")) {
+
+        return var.replaceAll("WORKSPACE", getProperty("WORKSPACE"))
+
+    } else if (var.contains("JOB_NAME")) {
+
+        return var.replaceAll("JOB_NAME", getProperty("JOB_NAME"))
+
+    } else {
+
+        return "UNSUPPORTED ENV VARIABLE - ${var}"
+
+    }
+
+}
+
+ 
+
+// publish html reports - uses the HTML publisher plugin
+
+def publishReports(n, reportsMap) {
+
+    if (reportsMap != {}) {
+
+        for (report in reportsMap) {
+
+            publishHTML target: [
+
+                allowMissing: false,
+
+                alwaysLinkToLastBuild: false,
+
+                keepAll: true,
+
+                reportDir: report["reportDir"],
+
+                reportFiles: report["reportFiles"],
+
+                reportName: report["reportName"]
+
+            ]
+
+        }
+
+    }
+
+    jacoco()
+
+}
+
+ 
+
+// deploy to cf - uses the CF plugin to push artifacts to CF
+
+// If the cf push requires proxy, set proxy at manage plugings -> advanced -> proxy (the envVars param of plugin seems not to be working)
+
+def deployToCf(n, deployMap, envMap, stageName) {
+
+    def listComponents = deployMap["components"]
+
+    def downloadLocation = deployMap["artifactDownloadDir"]
+
+    if (downloadLocation[-1] != "/") {
+
+        downloadLocation = downloadLocation.concat("/")
+
+    }
+
+    // create a new folder which will be the artifactory download location
+
+    if (listComponents == null || listComponents == []) {
+
+        print "Error, components list is empty! nothing to deploy!"
+
+    }
+
+    Map httpArtMap = new HashMap<String, String>();
+
+    def compName, artifactNameWithExt = ""
+
+ 
+
+    //delete all directories
+
+    deleteAllDir(downloadLocation)
+
+    for (comp in listComponents) {
+
+        compName = comp.get("name")
+
+        //copy manifest file to the artifactory directory
+
+        if (platform.toLowerCase() == "windows") {
+
+            print "Copying manifest file to $downloadLocation"
+
+            bat "xcopy \"${comp.get('manifestPath')}\" \"$downloadLocation\" /Y /D /f"
+
+        } else {
+
+            print "Copying manifest file to $downloadLocation"
+
+            sh "mkdir -p $downloadLocation"
+
+            sh "cp -r ${comp.get('manifestPath')} $downloadLocation"
+
+        }
+
+        artifactNameWithExt = comp.get("url").substring(comp.get("url").lastIndexOf("/")+1)
+
+        httpArtMap["url"] = comp.get("url")
+
+        httpArtMap["creds"] = deployMap["credsIdForArtifactory"]
+
+        httpArtMap["useProxy"] = true
+
+        httpArtMap["artifactName"] = artifactNameWithExt      
+
+ 
+
+        //push artifact to cloud foundry
+
+        dir(downloadLocation) {
+
+            //Download artifacts via REST api
+
+            downloadArtifactViaHTTP(httpArtMap)
+
+           
+
+            print("Pushing artifact - ${compName} to CF!")
+
+            performCFPush(deployMap, envMap)
+
+        }
+
+   }
+
+}
+
+ 
+
+//removes directory and sub-directories
+
+def deleteAllDir(dir) {
+
+    print("Deleting directory - ${dir}")
+
+    if (fileExists(dir)) {
+
+        if (platform.toLowerCase() == 'linux') {
+
+           sh "rm -rf ${dir}"
+
+        } else {
+
+            dir = dir.split("/")[0]
+
+            bat "rmdir /S /Q ${dir}"
+
+        }   
+
+    } else {
+
+        print("Could not find directory - ${dir} to delete!")
+
+    }  
+
+}
+
+ 
+
+def downloadArtifactViaHTTP(artMap) {
+
+    httpRequest authentication: artMap["creds"],
+
+        ignoreSslErrors: true,
+
+        responseHandle: 'NONE',
+
+        url: artMap["url"],
+
+        outputFile: artMap["artifactName"]
+
+}
+
+ 
+
+def performCFPush(deployMap, envMap) {
+
+    def endpoint = deployMap["cfEndpoint"]
+
+    def org = deployMap["org"]
+
+    def space = deployMap["space"]
+
+ 
+
+    def envList = []
+
+    envMap.each { k, v -> envList.add("${k}=${v}") }
+
+    print ("Using environment for stages/steps ==> ${envList}")
+
+ 
+
+    withEnv(envList) {
+
+        withCredentials(
+
+            [[$class: 'UsernamePasswordMultiBinding',
+
+                credentialsId: deployMap["credsIdForCF"],
+
+                usernameVariable: 'USERNAME',
+
+                passwordVariable: 'PASSWORD']]) {
+
+                    if (platform.toLowerCase() == "windows") {
+
+                        bat "cf login -a $endpoint -u $USERNAME -p $PASSWORD t -o ${org} -s ${space}"
+
+                        bat "cf push"
+
+                    } else {
+
+                        sh "cf login -a $endpoint -u $USERNAME -p $PASSWORD t -o $org -s $space"
+
+                        sh "cf push"
+
+                    }              
+
+                }
+
+    }
+
+}
+
+ 
+
+def performCheckForCompilerWarnings(n, warnMap, stageName) {
+
+    if (warnMap != null) {
+
+        if (warnMap["parsers"] == []) {
+
+            error "NO PARSERS found to scan for compiler warnings!"
+
+        } else {
+
+            executeStagesInNodeOrDocker(n, {
+
+                stage(stageName) {
+
+                    for (parser in warnMap["parsers"]) {
+
+                        warnings canComputeNew: false,
+
+                            canResolveRelativePaths: false,
+
+                            categoriesPattern: '',
+
+                            consoleParsers: [[parserName: parser]],
+
+                            defaultEncoding: '',
+
+                            excludePattern: warnMap["excludePattern"],
+
+                            messagesPattern: warnMap["messagesPattern"],
+
+                            failedTotalAll: warnMap["failThreshold"],
+
+                            unstableTotalAll: warnMap["unstableThreshold"],
+
+                            healthy: '',
+
+                            unHealthy: '',
+
+                            includePattern: ''
+
+                    }   
+
+                }
+
+            })
+
+        }
+
+    }
+
+}
+
+ 
+
+def invokeDockerStage(n, dockerMap, stageName) {
+
+    node(n) {
+
+        if (dockerMap != null) {
+
+            withDockerServer([uri: dockerMap["dockerServer"]]) {
+
+                withDockerRegistry([credentialsId: dockerMap["dockerRegistryCreds"], url: dockerMap["dockerRegistry"]]) {
+
+                    if (dockerMap["args"] == [] || !dockerMap["args"] instanceof List) {
+
+                        error "ARGS is empty or not of type LIST!"
+
+                    }
+
+                    if (platform.toLowerCase() == "windows") {
+
+                        bat "${dockerMap['args'].join('\n')}"
+
+                    } else {
+
+                        sh "${dockerMap['args'].join('\n')}"
+
+                    }  
+
+                }
+
+            }
+
+        } else {
+
+            error "Docker stage configuration is incorrect, got - ${dockerMap}"
+
+        }   
+
+    }
+
+}
+
+ 
+
+def executeStagesInNodeOrDocker(n, callback) {
+
+    if (docker) {
+
+        print("*** Executing stage in docker!")
+
+        node {
+
+            withDockerServer([uri: docker["dockerServer"], credentialsId: docker["dockerServerCreds"]]) {
+
+                withDockerRegistry([credentialsId: docker["dockerRegistryCreds"], url: docker["dockerRegistry"]]) {
+
+                    withDockerContainer(args: docker["args"], image: docker["image"]) {
+
+                        callback()
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    } else {
+
+        node(n) {
+
+            callback()
+
+        }
+
+    }
 
 }
